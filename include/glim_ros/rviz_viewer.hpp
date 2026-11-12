@@ -57,6 +57,7 @@ private:
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
 
   rclcpp::Time last_globalmap_pub_time;
+  double map_publish_interval;
 
   std::string imu_frame_id;
   std::string lidar_frame_id;

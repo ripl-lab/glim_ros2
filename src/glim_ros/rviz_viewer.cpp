@@ -30,6 +30,7 @@ RvizViewer::RvizViewer() : logger(create_module_logger("rviz")) {
   map_frame_id = config.param<std::string>("glim_ros", "map_frame_id", "map");
   publish_imu2lidar = config.param<bool>("glim_ros", "publish_imu2lidar", true);
   tf_time_offset = config.param<double>("glim_ros", "tf_time_offset", 1e-6);
+  map_publish_interval = config.param<double>("glim_ros", "map_publish_interval", 10.0);
 
   last_globalmap_pub_time = rclcpp::Clock(rcl_clock_type_t::RCL_ROS_TIME).now();
   trajectory.reset(new TrajectoryManager);
@@ -635,9 +636,9 @@ void RvizViewer::globalmap_on_update_submaps(const std::vector<SubMap::Ptr>& sub
       return;
     }
 
-    // Publish global map every 10 seconds
+    // Publish global map at most every map_publish_interval seconds
     const rclcpp::Time now = rclcpp::Clock(rcl_clock_type_t::RCL_ROS_TIME).now();
-    if (now - last_globalmap_pub_time < std::chrono::seconds(10)) {
+    if (now - last_globalmap_pub_time < rclcpp::Duration::from_seconds(map_publish_interval)) {
       return;
     }
     last_globalmap_pub_time = now;
