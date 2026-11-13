@@ -16,6 +16,24 @@
 
 namespace glim {
 
+namespace {
+geometry_msgs::msg::PoseStamped to_pose_stamped(const double stamp, const std::string& frame_id, const Eigen::Isometry3d& T) {
+  const Eigen::Quaterniond quat(T.linear());
+
+  geometry_msgs::msg::PoseStamped pose;
+  pose.header.stamp = from_sec(stamp);
+  pose.header.frame_id = frame_id;
+  pose.pose.position.x = T.translation().x();
+  pose.pose.position.y = T.translation().y();
+  pose.pose.position.z = T.translation().z();
+  pose.pose.orientation.x = quat.x();
+  pose.pose.orientation.y = quat.y();
+  pose.pose.orientation.z = quat.z();
+  pose.pose.orientation.w = quat.w();
+  return pose;
+}
+}  // namespace
+
 RvizViewer::RvizViewer() : logger(create_module_logger("rviz")) {
   const Config config(GlobalConfig::get_config_path("config_ros"));
 
@@ -76,6 +94,7 @@ std::vector<GenericTopicSubscription::Ptr> RvizViewer::create_subscriptions(rclc
     false};
   rclcpp::QoS map_qos(rclcpp::QoSInitialization(map_qos_profile.history, map_qos_profile.depth), map_qos_profile);
   map_pub = node.create_publisher<sensor_msgs::msg::PointCloud2>("~/map", map_qos);
+  trajectory_pub = node.create_publisher<nav_msgs::msg::Path>("~/trajectory", map_qos);
 
   points_pub = node.create_publisher<sensor_msgs::msg::PointCloud2>("~/points", 10);
   points_corrected_pub = node.create_publisher<sensor_msgs::msg::PointCloud2>("~/points_corrected", 10);
@@ -225,6 +244,32 @@ void RvizViewer::odometry_new_frame(const EstimationFrame::ConstPtr& new_frame, 
   const auto stamp = from_sec(new_frame->stamp);
   const auto tf_stamp = from_sec(new_frame->stamp + tf_time_offset);
   const auto imu_end_stamp = from_sec(imu_end_time);
+
+  // Trajectory, at the rate of the corrected pose
+  if (corrected) {
+    nav_msgs::msg::Path path;
+    {
+      std::lock_guard<std::mutex> lock(trajectory_mutex);
+      while (!trajectory_tail.empty() && trajectory_tail.back().first >= new_frame->stamp) {
+        trajectory_tail.pop_back();
+      }
+      trajectory_tail.emplace_back(new_frame->stamp, T_odom_imu);
+
+      if (trajectory_pub->get_subscription_count()) {
+        // The tail is moved with the latest correction, so it joins the end of the optimized part
+        path.poses = trajectory_optimized;
+        for (const auto& [tail_stamp, T_odom_tail] : trajectory_tail) {
+          path.poses.push_back(to_pose_stamped(tail_stamp, map_frame_id, trajectory->odom2world(T_odom_tail)));
+        }
+      }
+    }
+
+    if (!path.poses.empty()) {
+      path.header.stamp = stamp;
+      path.header.frame_id = map_frame_id;
+      trajectory_pub->publish(path);
+    }
+  }
 
   const bool publish_tf = !corrected;
   if (publish_tf) {
@@ -612,11 +657,29 @@ void RvizViewer::odometry_new_frame(const EstimationFrame::ConstPtr& new_frame, 
 void RvizViewer::globalmap_on_update_submaps(const std::vector<SubMap::Ptr>& submaps) {
   const SubMap::ConstPtr latest_submap = submaps.back();
 
+  // Optimized IMU trajectory, computed as GlobalMapping::save() does for traj_imu.txt. Done here
+  // because the global mapping thread is the one that updates the submap poses.
+  std::vector<geometry_msgs::msg::PoseStamped> optimized;
+  for (const auto& submap : submaps) {
+    const Eigen::Isometry3d T_world_endpoint_L = submap->T_world_origin * submap->T_origin_endpoint_L;
+    const Eigen::Isometry3d T_odom_imu0 = submap->frames.front()->T_world_imu;
+
+    for (const auto& frame : submap->frames) {
+      optimized.push_back(to_pose_stamped(frame->stamp, map_frame_id, T_world_endpoint_L * T_odom_imu0.inverse() * frame->T_world_imu));
+    }
+  }
+
   const double stamp_endpoint_R = latest_submap->odom_frames.back()->stamp;
   const Eigen::Isometry3d T_world_endpoint_R = latest_submap->T_world_origin * latest_submap->T_origin_endpoint_R;
   {
     std::lock_guard<std::mutex> lock(trajectory_mutex);
     trajectory->update_anchor(stamp_endpoint_R, T_world_endpoint_R);
+
+    // Corrected frames up to the end of the latest submap are now in the optimized part
+    trajectory_optimized.swap(optimized);
+    while (!trajectory_tail.empty() && trajectory_tail.front().first <= stamp_endpoint_R) {
+      trajectory_tail.pop_front();
+    }
   }
 
   std::vector<Eigen::Isometry3d, Eigen::aligned_allocator<Eigen::Isometry3d>> submap_poses(submaps.size());

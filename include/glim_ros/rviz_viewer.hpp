@@ -2,6 +2,7 @@
 
 #include <any>
 #include <atomic>
+#include <deque>
 #include <thread>
 #include <chrono>
 
@@ -11,6 +12,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 
 #include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
@@ -69,6 +71,7 @@ private:
   double tf_time_offset;
 
   std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>> map_pub;
+  std::shared_ptr<rclcpp::Publisher<nav_msgs::msg::Path>> trajectory_pub;
 
   std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>> points_pub;
   std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>> points_corrected_pub;
@@ -104,6 +107,11 @@ private:
 
   std::mutex trajectory_mutex;
   std::unique_ptr<TrajectoryManager> trajectory;
+
+  // Published trajectory: the optimized submap frames, then the newer corrected odometry frames
+  // (stamp, T_odom_imu) that no submap covers yet. Guarded by trajectory_mutex.
+  std::vector<geometry_msgs::msg::PoseStamped> trajectory_optimized;
+  std::deque<std::pair<double, Eigen::Isometry3d>, Eigen::aligned_allocator<std::pair<double, Eigen::Isometry3d>>> trajectory_tail;
 
   std::vector<gtsam_points::PointCloud::ConstPtr> submaps;
 
