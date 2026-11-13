@@ -56,6 +56,7 @@ private:
   std::unique_ptr<tf2_ros::TransformListener> tf_listener;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
 
+  rclcpp::Clock::SharedPtr clock;  // Node clock, so use_sim_time applies
   rclcpp::Time last_globalmap_pub_time;
   double map_publish_interval;
 

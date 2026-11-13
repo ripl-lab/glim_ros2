@@ -32,7 +32,6 @@ RvizViewer::RvizViewer() : logger(create_module_logger("rviz")) {
   tf_time_offset = config.param<double>("glim_ros", "tf_time_offset", 1e-6);
   map_publish_interval = config.param<double>("glim_ros", "map_publish_interval", 10.0);
 
-  last_globalmap_pub_time = rclcpp::Clock(rcl_clock_type_t::RCL_ROS_TIME).now();
   trajectory.reset(new TrajectoryManager);
 
   set_callbacks();
@@ -58,6 +57,9 @@ RvizViewer::~RvizViewer() {
 }
 
 std::vector<GenericTopicSubscription::Ptr> RvizViewer::create_subscriptions(rclcpp::Node& node) {
+  clock = node.get_clock();
+  last_globalmap_pub_time = clock->now();
+
   tf_buffer = std::make_unique<tf2_ros::Buffer>(node.get_clock());
   tf_listener = std::make_unique<tf2_ros::TransformListener>(*tf_buffer);
   tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(node);
@@ -637,7 +639,7 @@ void RvizViewer::globalmap_on_update_submaps(const std::vector<SubMap::Ptr>& sub
     }
 
     // Publish global map at most every map_publish_interval seconds
-    const rclcpp::Time now = rclcpp::Clock(rcl_clock_type_t::RCL_ROS_TIME).now();
+    const rclcpp::Time now = clock->now();
     if (now - last_globalmap_pub_time < rclcpp::Duration::from_seconds(map_publish_interval)) {
       return;
     }
